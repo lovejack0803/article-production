@@ -7,7 +7,7 @@ description: "LANY式の記事制作スキル。記事管理シートのURLと�
 
 LANY式の記事制作を、制作シート（Googleスプレッドシート）を受け渡し場所にして進める。工程は人がチャットで指示して切り替える。各工程を始めてよいかは、シートのデータの有無で判断する。
 
-このファイルの中身：第1部 入口（共通ルール・受付）／第2部 sheet-layout／第3部 1-outline（構成作成）／付録 mech_check.py。原稿作成・チェック・仕上げは**未実装**なので、指示されたら「この工程はまだスキルに入っていない」と伝えて止まる。
+このファイルの中身：第1部 入口（共通ルール・受付）／第2部 sheet-layout／第3部 1-outline（構成作成）／第4部 2-draft（原稿作成）／付録 mech_check.py。チェック・仕上げは**未実装**なので、指示されたら「この工程はまだスキルに入っていない」と伝えて止まる。
 
 正本は GitHub `lovejack0803/article-production` の `main` ブランチ、パス `article-production/SKILL.md` です。
 https://github.com/lovejack0803/article-production/blob/main/article-production/SKILL.md
@@ -22,7 +22,8 @@ https://github.com/lovejack0803/article-production/blob/main/article-production/
 | 指示の例 | 実行する工程 |
 |---|---|
 | 「〇〇の構成を作って」「構成作成して」 | 受付 → 1. 構成作成 |
-| 「原稿作成して」「チェックして」「仕上げて」 | 受付 → 2〜4（未実装） |
+| 「原稿作成して」 | 受付 → 2. 原稿作成 |
+| 「チェックして」「仕上げて」 | 受付 → 3〜4（未実装） |
 | 「受付だけ」「制作シートを用意して」 | 受付のみ |
 
 工程の指定がなければ聞く。工程を推測で選ぶと、人が確認するはずの段階を飛ばしてしまうため。
@@ -47,6 +48,10 @@ https://github.com/lovejack0803/article-production/blob/main/article-production/
 ```
 python3 -I mech_check.py --reg reg.json --project "<案件名>" --stage 構成 --print-rules
 python3 -I mech_check.py --reg reg.json --project "<案件名>" --stage 構成 --file outline.json --kw "<メインKW>"
+python3 -I mech_check.py --reg reg.json --project "<案件名>" --stage 本文 --print-rules
+python3 -I mech_check.py --reg reg.json --project "<案件名>" --stage 本文 --file body.html --outline confirmed.json --kw "<メインKW>"
+python3 -I mech_check.py --reg reg.json --project "<案件名>" --stage タイトル等 --file title_parts.txt --kw "<メインKW>"
+python3 -I mech_check.py --reg reg.json --project "<案件名>" --stage 最終確認 --file prose.txt
 ```
 
 結果は JSON（`errors`／`warnings`／`unsupported`／`checked`）。
@@ -334,9 +339,168 @@ JSONとして読めるか確かめる（読めなければ1回だけ直させる
 
 ---
 
+# 第4部 2-draft（原稿作成）
+
+確定した構成のとおりに、記事全体の原稿を書いて「執筆」タブに置く。構成の見出しは変えない。数値と事例は、構成の内容・出典にあるものだけを使う。
+
+## 事前チェック
+
+状態はステータス列では見ない。セルに値があるかで判断する。
+
+1. 事前調査の案件名・メインKWが空なら止まる（受付が必要）。メインKWはタイトルの検査に使う。
+2. `'構成案'!B6:K81` を `read_range` で読む。6行目以降がデータ（B〜FがAI案、G〜Kがディレクター編集。列の並びはどちらも タグ、見出し、内部リンク・CTA、内容・出典、必須KW）。行ごとに、ディレクター側のセルに値があればそれを、空なら同じ行のAI案を使う。空白だけのセルは空とみなす。タグと見出しが両方空の行は捨てる。
+3. ディレクター編集のタグ（G列）と見出し（H列）が、データ行のすべてで空なら止まる。G〜Kが未記入なので、原稿に進まない。どの行も空であることを伝えて、構成の確定を依頼する。
+4. 残った行でタグか見出しが片方だけ空なら、その行番号を示して止まる（推測でタグを補わない）。使えた行を `confirmed.json`（構成作成と同じ outline.json の形式）に保存する。どのセルをAI案で補ったかをメモする。
+5. レギュレーションを読み直し、`reg.json` を作る。`--print-rules` を次の3回実行し、出力をそのまま保存する（選び直さない）。対象は、有効が TRUE で、対象名が「共通」か事前調査の案件名（受付で案件候補と揃えた表記。「様」などは mech_check.py と同じ正規化）の行。
+   - `--stage 本文` → `rules_body.txt`
+   - `--stage タイトル等` → `rules_title.txt`
+   - `--stage 最終確認` → `rules_final.txt`（文の長さと文末はここにある）
+6. `'執筆'!B2:B6` を読む。1セルでも値があれば、セルごとに中身を示して上書きしてよいか聞く。答えが出るまで書かない。B1とC列は数式なので読んでも書かない。構成案のG〜Kにも書かない。
+
+## 執筆タブのセル
+
+第2部の対応は次のとおり。書くのはこの5セルだけ。
+
+| セル | 内容 |
+|---|---|
+| B2 | タイトル |
+| B3 | 導入文 |
+| B4 | 本文（まとめ以外。HTML） |
+| B5 | まとめ |
+| B6 | メタディスクリプション（第2部の「メタ」） |
+
+## 流れ
+
+本文は記事全体を1回で書く。見出しごとに分けて書かない。機械チェックのあとで直すのは、違反した見出しだけ。そのあとでタイトル・導入文・まとめ・メタを書く。原稿作成とチェックのあいだに、人の確認は挟まない。
+
+| 手順 | 担当 | 読む範囲 | 出力 |
+|---|---|---|---|
+| 0 | 自分 | 構成案 B6:K81、事前調査、レギュレーション、執筆 B2:B6 | `confirmed.json`, `rules_body.txt`, `rules_title.txt`, `rules_final.txt` |
+| 1 | 本文担当 | `confirmed.json`, `rules_body.txt`, 事前調査の Who〜独自情報 | `body.html` |
+| 2 | 自分＋直し担当 | `body.html` と機械チェックの errors | 直した `body.html`（最大2回） |
+| 3 | タイトル担当 | `body.html`, `confirmed.json`, `rules_title.txt`, `rules_final.txt`, 事前調査 | `title_parts.txt` |
+| 4 | 自分＋直し担当 | `title_parts.txt` と errors | 直した `title_parts.txt`（最大2回） |
+| 5 | 自分 | 上記 | 執筆 B2:B6、ログ |
+
+文字数は見出しと同じで数える。HTMLタグを除き、半角スペースと全角スペースは数えない（改行とタブも数えない）。①や「」は1文字。合否の範囲はシートの機械チェック列が正で、`rules_*.txt` の出力を使う。よくシートに入っている指定は次のとおり（シートが違う範囲ならシートに合わせる）。
+
+- 本文：`H3_P:200-250`（H3の本文は `<p>` 1つ）、`H2_INTRO_LEN:70-130(目安)`（H2のリードは `<p>` 1つ）、`H2_INTRO_LIST`（配下H3が2つ以上のとき、リードの箇条書きをそのH3見出しと一致させる）、`BODY_TAGS`、`BODY_NO_MATOME`
+- タイトル等：`TITLE_LEN:-32`（32字以内。`-32` は上限）、`TITLE_KW`（タイトルにメインKW）、`INTRO_LEN:200-250`、`MATOME_LEN:250-300`、`META_LEN:80-120`
+- 最終確認：`SENT_LEN:80(目安)`（1文80字以内）、`SAME_END:3(目安)`（同じ文末が3つ続かない）
+
+`(目安)`／`（目安）` は警告、それ以外はエラー。本文・導入文・まとめ・メタはです・ますで書き、体言止めにしない。タイトルは見出しなので、です・ますにしなくてよい。読み手が判断できないぼかし（「いろいろ」「しっかり」「適切に」など）は使わない。構成に無い数値・事例は作らず、その箇所に【要一次情報】と書く（【要出典】は使わない）。
+
+## 1. 本文担当：記事全体を1回で書く
+
+```
+あなたはSEO記事の執筆者です。メインKWは「{{メインKW}}」、案件名は「{{案件名}}」です。
+読んでよい範囲：作業フォルダの confirmed.json, rules_body.txt。事前調査の Who〜独自情報（スプレッドシート {{シートID}} の、第2部の探し方で特定した行）。
+出力：body.html（HTMLだけ。前後に説明やコードブロック記号を付けない）。
+
+# 手順
+1. confirmed.json の見出しの順に、まとめ以外の章を、記事全体として一度に書く。見出しごとに担当を分けない。見出しの文言と順番は1文字も変えない。H2やH3を足さない、消さない、まとめを本文に入れない。
+2. 各H2は、リードの<p>を1つ、配下H3が2つ以上ならその直下に<ul>を置く。<li>の文字は配下H3の見出しと一致させる（言い換えない）。H3は<p>を1つだけ。内部リンク・CTAは、その見出しの link に文があるときだけ、その<p>の末尾に構成の書式のまま入れる。2つ目の<p>は足さない。
+3. 事実は、その見出しの content に出典があるものだけ。必須KWは、その見出しの本文に入れる。数値が content に無ければ書かず、【要一次情報】とする。
+4. 本文はです・ます。体言止めにしない。rules_body.txt をすべて守る。文字数は、HTMLタグを除き、半角スペースと全角スペースを数えない。
+
+# 形
+<h2>見出し</h2>
+<p>リード</p>
+<ul>
+<li>配下H3の見出し</li>
+</ul>
+<h3>見出し</h3>
+<p>本文。【要一次情報】</p>
+```
+
+HTMLとして壊れていないか、見出しが confirmed.json のまとめ以外と一致するかを確かめる。ログ：「原稿／本文初稿」に見出し一覧。
+
+## 2. 本文の機械チェック（自分）
+
+```
+python3 -I mech_check.py --reg reg.json --project "<案件名>" --stage 本文 --file body.html --outline confirmed.json --kw "<メインKW>"
+```
+
+`errors` があれば直し担当に、違反した見出しだけ直させる。最大2回。`warnings`（目安）はログに残し、直しの条件にはしない。2回後に errors が残っても、見出しを増やして帳尻を合わせず、ログに残して手順3へ進む。
+
+```
+body.html は記事本文（まとめを除くHTML）です。下の「違反」は機械チェックの結果です。
+- 違反に出た見出しの本文だけを直し、それ以外の見出しは1文字も変えない。見出しの文言・順番・数は変えない。
+- 文字数は、HTMLタグを除き、半角スペースと全角スペースを数えない。
+- 数値・事例を新たに作らない。根拠が無ければ【要一次情報】のままにする。
+- 直したら body.html を保存し、「完了」とだけ返す。
+# 違反
+{{errors を1行ずつ}}
+# ルール（参考）
+{{rules_body.txt}}
+```
+
+## 3. タイトル担当：タイトル・導入文・まとめ・メタ
+
+本文が固まってから書く。ここも一式を1回で書く。
+
+```
+あなたはSEO記事の編集者です。メインKWは「{{メインKW}}」です。
+読んでよい範囲：作業フォルダの body.html, confirmed.json, rules_title.txt, rules_final.txt。事前調査の Who〜独自情報。
+出力：title_parts.txt（下の4つの見出し行を、この順で1行ずつ書き、本文を続ける。コードブロック記号は付けない）。
+
+# 手順
+1. タイトル：メインKWを含め、32字以内を目安に rules_title.txt の TITLE_LEN に合わせる。見出しなので、です・ますにしなくてよい。
+2. 導入文：本文の前に置き、読者の状況とこの記事で分かることだけを書く。です・ます。体言止めにしない。
+3. まとめ：本文の要点だけを短く繰り返す。新しい数値や事例を足さない。です・ます。本文（B4）には入れない。
+4. メタディスクリプション：検索結果で記事の中身が分かる文。です・ます。
+5. rules_title.txt と rules_final.txt を守る。1文は80字を目安に超えない。同じ文末（「ます。」「です。」など、末尾2文字）を3つ続けない。文字数はタグを除き、半角スペースと全角スペースを数えない。構成に無い数値は【要一次情報】。
+
+# 形
+タイトル
+（1行）
+
+導入文
+（本文）
+
+まとめ
+（本文）
+
+メタディスクリプション
+（本文）
+```
+
+## 4. タイトル等と最終確認の機械チェック（自分）
+
+```
+python3 -I mech_check.py --reg reg.json --project "<案件名>" --stage タイトル等 --file title_parts.txt --kw "<メインKW>"
+```
+
+導入文・本文・まとめだけを `prose.txt` に連結し（タイトルとメタは入れない）、文の長さと文末を見る。
+
+```
+python3 -I mech_check.py --reg reg.json --project "<案件名>" --stage 最終確認 --file prose.txt
+```
+
+`errors` があれば、違反のある部品（タイトル、導入文、まとめ、メタ、または本文の見出し）だけを直す。最大2回。本文を直すときは手順2と同じで、違反した見出し以外は変えない。残った errors はログに残して手順5へ進む。
+
+## 5. 書き込みとログ（自分）
+
+1. `'執筆'!B2:B6` を読み直す。事前チェックのあとで人が値を入れていれば、上書きの確認を取る。
+2. `clear_range` で `B2:B6` だけを消し、`write_range` で B2 タイトル、B3 導入文、B4 body.html、B5 まとめ、B6 メタディスクリプションを1回で書く。B1とC列、構成案のG〜Kには書かない。
+3. `read_range` で B2:B6 を読み、ファイルと一致するか確かめる。
+4. ログ：「原稿／機械チェック」（本文・タイトル等・最終確認の errors／warnings／unsupported）、「原稿／確定」（B2:B6、【要一次情報】が残る見出し、AI案で補ったセル）。
+
+## 完了と報告
+
+人の確認は挟まない。チェック工程はまだスキルに無いので、原稿を書いたところで止まる。報告は短く：
+
+- 書いた範囲（執筆 B2:B6）と、ディレクター編集が空でAI案を使ったセル
+- タイトルと、本文の見出し一覧
+- 機械チェック：残った errors、warnings、未検査の指定（なければ「なし」）
+- 【要一次情報】が付いた見出し
+- 次にやること：「チェック工程はまだスキルに入っていません。『チェックして』と指示されても、この工程はまだ実行できません」
+
+---
+
 # 付録 mech_check.py
 
-作業フォルダに `mech_check.py` として保存する（内容は変えない）。対応している指定：構成＝HEAD_TAGS、H2_COUNT、H3_PER_H2、HEAD_LEN、END_MATOME、HEAD_ORDER、H2_KW／本文＝BODY_TAGS、BODY_NO_MATOME、H2_INTRO_LIST、H2_INTRO_LEN、H3_P（`--outline` を渡すと見出しの一致 HEAD_MATCH も見る）／タイトル等＝TITLE_KW、TITLE_LEN、INTRO_LEN、MATOME_LEN、META_LEN／最終確認＝SENT_LEN、SAME_END。これ以外は `unsupported`。文字数系の指定は、HTMLタグを除き、半角スペースと全角スペースを数えない（改行とタブも数えない。①や「」は1文字）。H2_COUNT は「まとめ」で始まるH2と「よくある質問」で始まるH2（見出しが FAQ または Q&A だけのものも含む）を個数に入れない。
+作業フォルダに `mech_check.py` として保存する（内容は変えない）。対応している指定：構成＝HEAD_TAGS、H2_COUNT、H3_PER_H2、HEAD_LEN、END_MATOME、HEAD_ORDER、H2_KW／本文＝BODY_TAGS、BODY_NO_MATOME、H2_INTRO_LIST、H2_INTRO_LEN、H3_P（`--outline` を渡すと見出しの一致 HEAD_MATCH も見る。H2のリードは `<p>` 1つ）／タイトル等＝TITLE_KW、TITLE_LEN、INTRO_LEN、MATOME_LEN、META_LEN／最終確認＝SENT_LEN、SAME_END。これ以外は `unsupported`。原稿作成は本文・タイトル等・最終確認の3段階で回す。文字数系の指定は、HTMLタグを除き、半角スペースと全角スペースを数えない（改行とタブも数えない。①や「」は1文字）。`(目安)`／`（目安）` は警告、それ以外はエラー。H2_COUNT は「まとめ」で始まるH2と「よくある質問」で始まるH2（見出しが FAQ または Q&A だけのものも含む）を個数に入れない。
 
 ```python
 #!/usr/bin/env python3
@@ -510,9 +674,13 @@ def check_body(text, checks, outline, add, done, errors):
                     if lis != h3s:
                         a(f"H2_INTRO_LIST: 「{s['title']}」の導入の箇条書きが配下h3と一致しない")
                 if cid == "H2_INTRO_LEN":
-                    n, (lo, hi) = sum(len(plain(x)) for t, x in s["items"] if t == "p"), rng(p)
-                    if not lo <= n <= hi:
-                        a(f"H2_INTRO_LEN: 「{s['title']}」の導入文が{n}文字（{p}文字）")
+                    ps = [x for t, x in s["items"] if t == "p"]
+                    if len(ps) != 1:
+                        add(False)(f"H2_INTRO_LEN: 「{s['title']}」のリードの<p>が{len(ps)}個（1個にする）")
+                    else:
+                        n, (lo, hi) = len(plain(ps[0])), rng(p)
+                        if not lo <= n <= hi:
+                            a(f"H2_INTRO_LEN: 「{s['title']}」のリードが{n}文字（{p}文字）")
         elif cid == "H3_P":
             lo, hi = rng(p)
             for s in [s for s in secs if s["tag"] == "h3"]:
@@ -561,6 +729,7 @@ def check_title(text, checks, kw, add, done, errors):
 
 
 def check_final(text, checks, add, done):
+    # 文字数は plain（タグと半角・全角スペースを除く）。（目安）は soft で警告になる。SENT_LEN の数字は上限。
     sents = []
     for seg in [plain(x) for x in re.split(r"</?(?:p|li|ul|h[1-6])[^>]*>|\n", text) if plain(x)]:
         sents += [s for s in re.split(r"(?<=[。！？])", seg) if len(s) > 1]
