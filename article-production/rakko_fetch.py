@@ -11,11 +11,27 @@
 import argparse
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.request
 
 BASE = "https://api.rakkokeyword.com"
+# クレジットを使う順。見出しが0件なら、この後の呼び出しはしない。
+CALL_ORDER = ("headline", "suggest-keywords", "co-occurrence", "other-keywords")
+# ページの装飾見出し。括弧と空白を除いた文字列が一致するものだけ落とす。
+DENY_HEADINGS = (
+    "関連記事",
+    "関連記事一覧",
+    "目次",
+    "送信が完了しました",
+    "人気記事",
+    "新着記事",
+    "おすすめ記事",
+    "この記事をシェア",
+    "シェアする",
+)
+_DECOR = re.compile(r"[\s　【】\[\]（）()「」『』■◆▶▼※・]+")
 # 公式ドキュメントの POST。コネクタの取得範囲（Googleサジェスト100、見出しは h1〜h3 の10件）にパラメータを合わせる。
 PATHS = {
     "suggest-keywords": "/v1/suggest-keywords",
@@ -132,14 +148,31 @@ def post_json(name, body, key, timeout):
     }
 
 
-def call_with_retry(name, body, key, timeout):
+def should_retry(result):
+    """応答が返る前の通信エラーだけ再試行する。401/403 や課金されうる失敗は再試行しない。"""
+    return (not result["ok"]) and result.get("status") is None
+
+
+def call_billable(name, body, key, timeout):
     first = post_json(name, body, key, timeout)
-    if first["ok"]:
+    if not should_retry(first):
         return first
     second = post_json(name, body, key, timeout)
     second["retried"] = True
-    second["consumedCredit"] = first["consumedCredit"] + second["consumedCredit"]
+    second["retryReason"] = "network error before response"
     return second
+
+
+def normalize_heading(text):
+    body = text
+    head, sep, rest = text.partition(":")
+    if sep and head.lower() in {"h1", "h2", "h3", "h4", "h5", "h6"}:
+        body = rest
+    return _DECOR.sub("", body)
+
+
+def is_chrome_heading(text):
+    return normalize_heading(text) in {normalize_heading(item) for item in DENY_HEADINGS}
 
 
 def sheet_rows(bodies):
@@ -160,7 +193,7 @@ def sheet_rows(bodies):
         for hl in item.get("headlines") or []:
             level = str(hl.get("level") or "").lower()
             text = hl.get("text") or ""
-            if level and text:
+            if level and text and not is_chrome_heading(text):
                 headlines.append(f"{level}:{text}")
         pages.append({
             "rank": metrics.get("position"),
@@ -184,34 +217,49 @@ def public_call(result):
     return {k: v for k, v in result.items() if k != "body"}
 
 
+def _stopped(calls, credit, result, reason):
+    return {
+        "ok": False,
+        "route": "api",
+        "connectorMissing": None,
+        "keyMissing": False,
+        "keyInvalid": result.get("keyInvalid", False),
+        "loginPage": result.get("loginPage", False),
+        "consumedCredit": credit,
+        "calls": calls,
+        "stoppedBecause": reason,
+        "suggest": [],
+        "cooccurrence": [],
+        "lsi": [],
+        "paa": [],
+        "pages": [],
+    }
+
+
 def fetch(keyword, key, timeout):
     calls = []
     bodies = {}
     credit = 0
-    for name, body in payloads(keyword).items():
-        result = call_with_retry(name, body, key, timeout)
+    bodies_by_name = payloads(keyword)
+    for name in CALL_ORDER:
+        result = call_billable(name, bodies_by_name[name], key, timeout)
         credit += result["consumedCredit"]
         if not result["ok"]:
             calls.append(public_call(result))
-            return {
-                "ok": False,
-                "route": "api",
-                "connectorMissing": None,
-                "keyMissing": False,
-                "keyInvalid": result["keyInvalid"],
-                "loginPage": result["loginPage"],
-                "consumedCredit": credit,
-                "calls": calls,
-                "suggest": [],
-                "cooccurrence": [],
-                "lsi": [],
-                "paa": [],
-                "pages": [],
-            }
+            return _stopped(calls, credit, result, f"{name} failed")
         calls.append(public_call(result))
         bodies[name] = result["body"]
+        if name == "headline":
+            pages = sheet_rows({
+                "suggest-keywords": {"data": {"items": []}},
+                "co-occurrence": {"data": {"items": []}},
+                "other-keywords": {"data": {"items": []}},
+                "headline": result["body"],
+            })["pages"]
+            if not any(page["headlines"] for page in pages):
+                return _stopped(calls, credit, result, "headline returned no content headings")
     rows = sheet_rows(bodies)
-    ok = bool(rows["pages"])
+    ok = any(page["headlines"] for page in rows["pages"])
     return {
         "ok": ok,
         "route": "api",
@@ -221,7 +269,7 @@ def fetch(keyword, key, timeout):
         "loginPage": False,
         "consumedCredit": credit,
         "calls": calls,
-        "stoppedBecause": None if ok else "headline items are empty",
+        "stoppedBecause": None if ok else "headline returned no content headings",
         **rows,
     }
 
@@ -258,20 +306,28 @@ def self_test():
         ]}},
         "headline": {"data": {"items": [{
             "page": {"url": "https://example.com/a", "title": "例", "description": "説明"},
-            "metrics": {"position": 1, "headlineCount": 2, "wordCount": 100},
-            "headlines": [{"level": "h2", "text": "費用"}, {"level": "h3", "text": "内訳"}],
-        }, {
-            "page": {"url": "https://example.com/a", "title": "同じ", "description": ""},
-            "metrics": {"position": 1, "headlineCount": 1, "wordCount": 10},
-            "headlines": [{"level": "h2", "text": "費用"}],
+            "metrics": {"position": 1, "headlineCount": 6, "wordCount": 100},
+            "headlines": [
+                {"level": "h2", "text": "費用"},
+                {"level": "h2", "text": "【目次】"},
+                {"level": "h2", "text": "関連記事"},
+                {"level": "h3", "text": "送信が完了しました"},
+                {"level": "h3", "text": "関連記事の書き方"},
+                {"level": "h3", "text": "内訳"},
+            ],
         }]}},
     }
     rows = sheet_rows(bodies)
     assert rows["suggest"] == ["seo 対策"]
     assert rows["cooccurrence"] == ["検索"]
     assert rows["lsi"] == ["内部対策"] and rows["paa"] == ["費用は？"]
-    assert rows["pages"][0]["headlines"] == ["h2:費用", "h3:内訳"]
+    assert rows["pages"][0]["headlines"] == ["h2:費用", "h3:関連記事の書き方", "h3:内訳"]
     assert rows["pages"][0]["rank"] == 1
+    assert CALL_ORDER[0] == "headline" and CALL_ORDER[-1] == "other-keywords"
+    assert should_retry({"ok": False, "status": None})
+    assert not should_retry({"ok": False, "status": 401})
+    assert not should_retry({"ok": False, "status": 403})
+    assert not should_retry({"ok": False, "status": 500, "consumedCredit": 45})
     dumped = json.dumps(missing_key_result())
     assert "RAKKO_API_KEY is not set" in dumped
     assert secret not in dumped
