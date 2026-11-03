@@ -141,7 +141,7 @@ python3 -I mech_check.py --reg reg.json --project "<案件名>" --stage 最終�
 ## 5. 書き込みとログ（自分）
 
 1. `'執筆'!B2:B6` を読み直す。事前チェックのあとで人が値を入れていれば、上書きの確認を取る。
-2. `clear_range` で `B2:B6` だけを消し、`write_range` で B2 タイトル、B3 導入文、B4 body.html、B5 まとめ、B6 メタディスクリプションを1回で書く。B1とC列、構成案のG〜Kには書かない。
+2. バックアップを取ってから、`clear_range` で `B2:B6` だけを消し、`write_range` で B2 タイトル、B3 導入文、B4 body.html、B5 まとめ、B6 メタディスクリプションを1回で書く。B1とC列、構成案のG〜Kには書かない。
 3. `read_range` で B2:B6 を読み、ファイルと一致するか確かめる。
 4. ログ：「原稿／機械チェック」（本文・タイトル等・最終確認の errors／warnings／unsupported）、「原稿／確定」（B2:B6、【要一次情報】が残る見出し、AI案で補ったセル）。
 
