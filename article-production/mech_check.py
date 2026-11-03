@@ -6,7 +6,9 @@ H2_COUNT は「まとめ」と「よくある質問」のH2を個数に入れな
   python3 -I mech_check.py --reg reg.json --project 案件名 --stage 構成 --print-rules
   python3 -I mech_check.py --reg reg.json --project 案件名 --stage 構成|本文|タイトル等|最終確認 --file F --kw KW [--outline O] [--split-out J]
 """
-import argparse, json, re, sys
+import argparse, csv, io, json, re, sys
+
+REG_INFO = {}  # 読んだ行数と、最終行が埋まっているか（範囲切れの検出用）
 
 STAGES = ("構成", "本文", "タイトル等", "最終確認")
 FENCE = "`" * 3
@@ -18,8 +20,14 @@ def norm_name(s):
 
 
 def load_rules(path, project, stage):
-    d = json.load(open(path, encoding="utf-8"))
-    rows = d["values"] if isinstance(d, dict) else d
+    raw = open(path, encoding="utf-8").read()
+    try:
+        d = json.loads(raw)
+        rows = d["values"] if isinstance(d, dict) else d
+    except ValueError:  # read_range の CSV をそのまま保存したものも受け付ける
+        rows = list(csv.reader(io.StringIO(raw)))
+    REG_INFO["rows"] = len(rows)
+    REG_INFO["last_filled"] = bool(rows) and any(str(c).strip() for c in rows[-1])
     head = [str(h).strip() for h in rows[0]] if rows else []
     col = lambda name, dflt: head.index(name) if name in head else dflt  # 列は見出し名で探す
     c_t, c_s, c_r, c_on, c_url, c_m = (col("対象名", 1), col("対象工程", 2), col("ルール", 4),
@@ -257,6 +265,8 @@ def main():
     ap.add_argument("--print-rules", action="store_true")
     a = ap.parse_args()
     rules = load_rules(a.reg, a.project, a.stage)
+    if REG_INFO.get("last_filled") and REG_INFO["rows"] >= 100:
+        print(f"警告 REG_RANGE: レギュレーションの最終行（{REG_INFO['rows']}行目）まで埋まっている。範囲を広げて読み直す", file=sys.stderr)
     if a.print_rules:
         for r in rules:
             print(f"[{'共通' if r['target'] == '共通' else '案件'}] {r['rule']}" + (f"\n参照URL: {r['url']}" if r["url"] else ""))
@@ -280,6 +290,8 @@ def main():
         check_final(text, checks, add, done)
     for cid, p, soft in checks:
         (E["checked"] if cid in done else E["unsupported"]).append(cid + (f":{p}" if p else "") + ("(目安)" if soft else ""))
+    if REG_INFO.get("last_filled") and REG_INFO["rows"] >= 100:
+        E["warnings"].append(f"REG_RANGE: レギュレーションの最終行（{REG_INFO['rows']}行目）まで埋まっている。範囲を広げて読み直す")
     json.dump(E, sys.stdout, ensure_ascii=False, indent=1)
     print()
 
